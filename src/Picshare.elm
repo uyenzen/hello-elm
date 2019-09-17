@@ -1,9 +1,12 @@
-module Picshare exposing (main)
+module Picshare exposing (main, photoDecoder)
 
 import Browser
 import Html exposing (..)
 import Html.Attributes exposing (class, disabled, placeholder, src, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
+import Http
+import Json.Decode exposing (Decoder, bool, int, list, string, succeed)
+import Json.Decode.Pipeline exposing (hardcoded, required)
 
 
 baseUrl : String
@@ -11,8 +14,13 @@ baseUrl =
     "http://localhost:5000/"
 
 
-type alias Model =
-    { url : String
+type alias Id =
+    Int
+
+
+type alias Photo =
+    { id : Id
+    , url : String
     , caption : String
     , liked : Bool
     , comments : List String
@@ -20,57 +28,119 @@ type alias Model =
     }
 
 
+type alias Model =
+    { photo : Maybe Photo
+    }
+
+
+photoDecoder : Decoder Photo
+photoDecoder =
+    succeed Photo
+        |> required "id" int
+        |> required "url" string
+        |> required "caption" string
+        |> required "liked" bool
+        |> required "comments" (list string)
+        |> hardcoded ""
+
+
 initialModel : Model
 initialModel =
-    { url = baseUrl ++ "1.jpg"
-    , caption = "Surfing"
-    , liked = False
-    , comments = [ "Cowabunga, dude!" ]
-    , newComment = ""
+    { photo = Nothing
+
+    -- Just
+    --     { id = 1
+    --     , url = baseUrl ++ "1.jpg"
+    --     , caption = "Surfing"
+    --     , liked = False
+    --     , comments = [ "Cowabunga, dude!" ]
+    --     , newComment = ""
+    --     }
     }
+
+
+init : () -> ( Model, Cmd Msg )
+init _ =
+    ( initialModel, fetchFeed )
 
 
 type Msg
     = ToggleLike
     | UpdateComment String
     | SaveComment
+    | LoadFeed (Result Http.Error Photo)
 
 
-saveNewComment : Model -> Model
-saveNewComment model =
+fetchFeed : Cmd Msg
+fetchFeed =
+    Http.get
+        { url = baseUrl ++ "feed/1"
+        , expect = Http.expectJson LoadFeed photoDecoder
+        }
+
+
+saveNewComment : Photo -> Photo
+saveNewComment photo =
     let
         comment =
-            String.trim model.newComment
+            String.trim photo.newComment
     in
     case comment of
         "" ->
-            model
+            photo
 
         _ ->
-            { model
-                | comments = model.comments ++ [ comment ]
+            { photo
+                | comments = photo.comments ++ [ comment ]
                 , newComment = ""
             }
 
 
-update : Msg -> Model -> Model
+toggleLike : Photo -> Photo
+toggleLike photo =
+    { photo | liked = not photo.liked }
+
+
+updateComment : String -> Photo -> Photo
+updateComment comment photo =
+    { photo | newComment = comment }
+
+
+updateFeed : (Photo -> Photo) -> Maybe Photo -> Maybe Photo
+updateFeed updatePhoto maybePhoto =
+    Maybe.map updatePhoto maybePhoto
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         ToggleLike ->
-            { model | liked = not model.liked }
+            ( { model | photo = updateFeed toggleLike model.photo }
+            , Cmd.none
+            )
 
         UpdateComment comment ->
-            { model | newComment = comment }
+            ( { model | photo = updateFeed (updateComment comment) model.photo }
+            , Cmd.none
+            )
 
         SaveComment ->
-            saveNewComment model
+            ( { model | photo = updateFeed saveNewComment model.photo }
+            , Cmd.none
+            )
+
+        LoadFeed (Ok photo) ->
+            ( { model | photo = Just photo }, Cmd.none )
+
+        LoadFeed (Err _) ->
+            ( model, Cmd.none )
 
 
-viewLoveButton : Model -> Html Msg
-viewLoveButton model =
+viewLoveButton : Photo -> Html Msg
+viewLoveButton photo =
     let
         buttonClass =
-            if model.liked then
+            if photo.liked then
                 "fa-heart"
 
             else
@@ -103,35 +173,46 @@ viewCommentList comments =
                 ]
 
 
-viewComments : Model -> Html Msg
-viewComments model =
+viewComments : Photo -> Html Msg
+viewComments photo =
     div []
-        [ viewCommentList model.comments
+        [ viewCommentList photo.comments
         , form [ class "new-comment", onSubmit SaveComment ]
             [ input
                 [ type_ "text"
                 , placeholder "Add a comment..."
-                , value model.newComment
+                , value photo.newComment
                 , onInput UpdateComment
                 ]
                 []
             , button
-                [ disabled (String.isEmpty model.newComment) ]
+                [ disabled (String.isEmpty photo.newComment) ]
                 [ text "Save" ]
             ]
         ]
 
 
-viewDetailedPhoto : Model -> Html Msg
-viewDetailedPhoto model =
+viewDetailedPhoto : Photo -> Html Msg
+viewDetailedPhoto photo =
     div [ class "detailed-photo" ]
-        [ img [ src model.url ] []
+        [ img [ src photo.url ] []
         , div [ class "photo-info" ]
-            [ viewLoveButton model
-            , h2 [ class "caption" ] [ text model.caption ]
-            , viewComments model
+            [ viewLoveButton photo
+            , h2 [ class "caption" ] [ text photo.caption ]
+            , viewComments photo
             ]
         ]
+
+
+viewFeed : Maybe Photo -> Html Msg
+viewFeed maybePhoto =
+    case maybePhoto of
+        Just photo ->
+            viewDetailedPhoto photo
+
+        Nothing ->
+            div [ class "loading-feed" ]
+                [ text "Loading Feed..." ]
 
 
 view : Model -> Html Msg
@@ -141,15 +222,21 @@ view model =
             []
             [ text "Picshare" ]
         , div [ class "content-flow" ]
-            [ viewDetailedPhoto model
+            [ viewFeed model.photo
             ]
         ]
 
 
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.none
+
+
 main : Program () Model Msg
 main =
-    Browser.sandbox
-        { init = initialModel
+    Browser.element
+        { init = init
         , view = view
         , update = update
+        , subscriptions = subscriptions
         }
