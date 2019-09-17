@@ -11,9 +11,18 @@
     <div id="main" class="main">
     </div>
     <script>
-     Elm.Picshare.init({
-       node: document.getElementById("main")
-     });
+      (function() {
+        var app = Elm.Picshare.init({
+          node: document.getElementById("main")
+        });
+        function listen(url) {
+          var socket = new WebSocket(url);
+          socket.onmessage = function (event) {
+            app.ports.receive.send(event.data);
+          }
+        }
+        app.ports.listen.subscribe(listen);
+      })();
     </script>
   </body>
 </html>
